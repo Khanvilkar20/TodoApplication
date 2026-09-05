@@ -6,6 +6,7 @@ import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
 import HomeScreen from '../screens/HomeScreen';
 import AddTaskScreen from '../screens/AddTaskScreen';
+import EditTaskScreen from '../screens/EditTaskScreen';
 import { useAuth } from '../context/AuthContext';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -33,6 +34,7 @@ export default function AppNavigator() {
       >
         <AppStack.Screen name="Home" component={HomeScreen} />
         <AppStack.Screen name="AddTask" component={AddTaskScreen} />
+        <AppStack.Screen name="EditTask" component={EditTaskScreen} />
       </AppStack.Navigator>
     );
   }

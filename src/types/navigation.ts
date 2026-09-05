@@ -1,3 +1,5 @@
+import type { Task } from './index';
+
 /**
  * Defines the parameter lists for stack navigators.
  */
@@ -9,5 +11,5 @@ export type AuthStackParamList = {
 export type AppStackParamList = {
   Home: undefined;
   AddTask: undefined;
+  EditTask: { task: Task };
 };
-

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -19,6 +20,9 @@ import { getTasks, updateTask, deleteTask } from '../services/api';
 import type { Task, TaskPriority } from '../types';
 import type { AppStackParamList } from '../types/navigation';
 
+export type FilterType = 'all' | 'pending' | 'completed';
+export type SortType = 'smart' | 'deadline' | 'priority' | 'newest';
+
 type HomeScreenNavigationProp = NativeStackNavigationProp<
   AppStackParamList,
   'Home'
@@ -27,6 +31,20 @@ type HomeScreenNavigationProp = NativeStackNavigationProp<
 type Props = {
   navigation: HomeScreenNavigationProp;
 };
+
+const PRIORITY_WEIGHT: Record<TaskPriority, number> = {
+  high: 3,
+  medium: 2,
+  low: 1,
+};
+
+function safeTimestamp(dateStr?: string, fallback = 0): number {
+  if (!dateStr) {
+    return fallback;
+  }
+  const t = new Date(dateStr).getTime();
+  return isNaN(t) ? fallback : t;
+}
 
 function formatDateTime(dateStr: string): string {
   if (!dateStr) {
@@ -86,8 +104,12 @@ export default function HomeScreen({ navigation }: Props) {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
 
-  // Safeguard ref to ensure delete presses never trigger toggle completion
-  const isDeletingRef = useRef(false);
+  // Filter and Sort states
+  const [filter, setFilter] = useState<FilterType>('all');
+  const [sort, setSort] = useState<SortType>('smart');
+
+  // Safeguard ref to ensure delete/edit presses never trigger toggle completion
+  const isActionRef = useRef(false);
 
   const loadTasks = useCallback(async (isRefresh = false) => {
     if (isRefresh) {
@@ -119,8 +141,100 @@ export default function HomeScreen({ navigation }: Props) {
     }, [loadTasks])
   );
 
+  // Filter counts
+  const counts = useMemo(() => {
+    let pending = 0;
+    let completed = 0;
+    for (const t of tasks) {
+      if (t.completed) {
+        completed++;
+      } else {
+        pending++;
+      }
+    }
+    return { all: tasks.length, pending, completed };
+  }, [tasks]);
+
+  // Processed tasks (filtering and sorting without mutating state)
+  const processedTasks = useMemo(() => {
+    // 1. Filter
+    const filtered = tasks.filter((t) => {
+      if (filter === 'pending') {
+        return !t.completed;
+      }
+      if (filter === 'completed') {
+        return t.completed;
+      }
+      return true;
+    });
+
+    // 2. Sort (create a shallow copy to prevent mutation)
+    return [...filtered].sort((a, b) => {
+      // Pending tasks always appear before completed tasks
+      if (a.completed !== b.completed) {
+        return a.completed ? 1 : -1;
+      }
+
+      const aDeadline = safeTimestamp(a.deadline, Infinity);
+      const bDeadline = safeTimestamp(b.deadline, Infinity);
+      const aPriority = PRIORITY_WEIGHT[a.priority] ?? 2;
+      const bPriority = PRIORITY_WEIGHT[b.priority] ?? 2;
+      const aCreated = safeTimestamp(a.createdAt, 0);
+      const bCreated = safeTimestamp(b.createdAt, 0);
+
+      if (sort === 'smart') {
+        // If completed, sort newest first
+        if (a.completed && b.completed) {
+          return bCreated - aCreated;
+        }
+
+        // Check if deadlines are reasonably close (within 24 hours)
+        const diffMs = Math.abs(aDeadline - bDeadline);
+        const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
+        if (diffMs <= TWENTY_FOUR_HOURS_MS && aPriority !== bPriority) {
+          // Higher priority takes precedence
+          return bPriority - aPriority;
+        }
+
+        // Earlier deadline takes precedence
+        if (aDeadline !== bDeadline) {
+          return aDeadline - bDeadline;
+        }
+
+        // If deadlines identical, higher priority takes precedence
+        if (aPriority !== bPriority) {
+          return bPriority - aPriority;
+        }
+
+        // Tie-breaker: newest creation time
+        return bCreated - aCreated;
+      }
+
+      if (sort === 'deadline') {
+        if (aDeadline !== bDeadline) {
+          return aDeadline - bDeadline;
+        }
+        return bPriority - aPriority;
+      }
+
+      if (sort === 'priority') {
+        if (aPriority !== bPriority) {
+          return bPriority - aPriority;
+        }
+        return aDeadline - bDeadline;
+      }
+
+      if (sort === 'newest') {
+        return bCreated - aCreated;
+      }
+
+      return 0;
+    });
+  }, [tasks, filter, sort]);
+
   const handleToggleComplete = async (task: Task) => {
-    if (isDeletingRef.current) {
+    if (isActionRef.current) {
       return;
     }
 
@@ -143,9 +257,9 @@ export default function HomeScreen({ navigation }: Props) {
   };
 
   const handleDeleteTask = (task: Task) => {
-    isDeletingRef.current = true;
+    isActionRef.current = true;
     setTimeout(() => {
-      isDeletingRef.current = false;
+      isActionRef.current = false;
     }, 500);
 
     Alert.alert(
@@ -178,6 +292,15 @@ export default function HomeScreen({ navigation }: Props) {
       ],
       { cancelable: true }
     );
+  };
+
+  const handleEditTask = (task: Task) => {
+    isActionRef.current = true;
+    setTimeout(() => {
+      isActionRef.current = false;
+    }, 500);
+
+    navigation.navigate('EditTask', { task });
   };
 
   const renderTaskItem = ({ item }: { item: Task }) => {
@@ -262,29 +385,46 @@ export default function HomeScreen({ navigation }: Props) {
           </View>
         </View>
 
-        {/* Card Footer with Tap Hint and Separate Delete Button */}
+        {/* Card Footer with Tap Hint and Actions (Edit, Delete) */}
         <View style={styles.cardFooter}>
           <Text style={styles.tapHintText}>
             {item.completed ? 'Tap card to mark pending' : 'Tap card to complete'}
           </Text>
-          <Pressable
-            style={({ pressed }) => [
-              styles.deleteButton,
-              pressed && styles.deleteButtonPressed,
-            ]}
-            onPress={(e) => {
-              e.stopPropagation();
-              handleDeleteTask(item);
-            }}
-            disabled={isActionLoading}
-            hitSlop={8}
-          >
-            {isActionLoading ? (
-              <ActivityIndicator size="small" color="#DC2626" />
-            ) : (
-              <Text style={styles.deleteButtonText}>Delete</Text>
-            )}
-          </Pressable>
+          <View style={styles.cardActionsRow}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.editButton,
+                pressed && styles.editButtonPressed,
+              ]}
+              onPress={(e) => {
+                e.stopPropagation();
+                handleEditTask(item);
+              }}
+              disabled={isActionLoading}
+              hitSlop={8}
+            >
+              <Text style={styles.editButtonText}>Edit</Text>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.deleteButton,
+                pressed && styles.deleteButtonPressed,
+              ]}
+              onPress={(e) => {
+                e.stopPropagation();
+                handleDeleteTask(item);
+              }}
+              disabled={isActionLoading}
+              hitSlop={8}
+            >
+              {isActionLoading ? (
+                <ActivityIndicator size="small" color="#DC2626" />
+              ) : (
+                <Text style={styles.deleteButtonText}>Delete</Text>
+              )}
+            </Pressable>
+          </View>
         </View>
       </Pressable>
     );
@@ -342,13 +482,84 @@ export default function HomeScreen({ navigation }: Props) {
         </View>
       ) : (
         <View style={styles.contentWrapper}>
+          {/* Filtering and Sorting Controls Bar */}
+          {tasks.length > 0 && (
+            <View style={styles.controlsContainer}>
+              {/* Filter Chips */}
+              <View style={styles.filterRow}>
+                {(['all', 'pending', 'completed'] as FilterType[]).map((f) => {
+                  const isSelected = filter === f;
+                  const count = counts[f];
+                  const label = f.charAt(0).toUpperCase() + f.slice(1);
+                  return (
+                    <TouchableOpacity
+                      key={f}
+                      style={[
+                        styles.filterChip,
+                        isSelected && styles.filterChipActive,
+                      ]}
+                      onPress={() => setFilter(f)}
+                      activeOpacity={0.7}
+                    >
+                      <Text
+                        style={[
+                          styles.filterChipText,
+                          isSelected && styles.filterChipTextActive,
+                        ]}
+                      >
+                        {label} ({count})
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {/* Sort Chips */}
+              <View style={styles.sortRow}>
+                <Text style={styles.sortLabel}>Sort:</Text>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.sortScrollContent}
+                >
+                  {(['smart', 'deadline', 'priority', 'newest'] as SortType[]).map(
+                    (s) => {
+                      const isSelected = sort === s;
+                      const label = s.charAt(0).toUpperCase() + s.slice(1);
+                      return (
+                        <TouchableOpacity
+                          key={s}
+                          style={[
+                            styles.sortChip,
+                            isSelected && styles.sortChipActive,
+                          ]}
+                          onPress={() => setSort(s)}
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[
+                              styles.sortChipText,
+                              isSelected && styles.sortChipTextActive,
+                            ]}
+                          >
+                            {label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    }
+                  )}
+                </ScrollView>
+              </View>
+            </View>
+          )}
+
           <FlatList
-            data={tasks}
+            data={processedTasks}
             keyExtractor={(item) => item._id}
             renderItem={renderTaskItem}
             contentContainerStyle={[
               styles.listContent,
-              tasks.length === 0 && styles.emptyListContent,
+              processedTasks.length === 0 && styles.emptyListContent,
             ]}
             refreshControl={
               <RefreshControl
@@ -360,17 +571,23 @@ export default function HomeScreen({ navigation }: Props) {
             }
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
-                <Text style={styles.emptyTitle}>No Tasks Found</Text>
-                <Text style={styles.emptySubtitle}>
-                  You do not have any tasks right now. Pull down to refresh or create your first task.
+                <Text style={styles.emptyTitle}>
+                  {tasks.length === 0 ? 'No Tasks Found' : 'No Matching Tasks'}
                 </Text>
-                <TouchableOpacity
-                  style={styles.emptyAddButton}
-                  onPress={() => navigation.navigate('AddTask')}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.emptyAddButtonText}>+ Create Task</Text>
-                </TouchableOpacity>
+                <Text style={styles.emptySubtitle}>
+                  {tasks.length === 0
+                    ? 'You do not have any tasks right now. Pull down to refresh or create your first task.'
+                    : `No ${filter} tasks found. Try changing your filter or add a new task.`}
+                </Text>
+                {tasks.length === 0 ? (
+                  <TouchableOpacity
+                    style={styles.emptyAddButton}
+                    onPress={() => navigation.navigate('AddTask')}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.emptyAddButtonText}>+ Create Task</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             }
           />
@@ -449,6 +666,74 @@ const styles = StyleSheet.create({
     color: '#DC2626',
     fontSize: 13,
     fontWeight: '600',
+  },
+  controlsContainer: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  filterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  filterChip: {
+    flex: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterChipActive: {
+    backgroundColor: '#4F46E5',
+  },
+  filterChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#4B5563',
+  },
+  filterChipTextActive: {
+    color: '#FFFFFF',
+  },
+  sortRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  sortLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#6B7280',
+    marginRight: 8,
+  },
+  sortScrollContent: {
+    flexDirection: 'row',
+    gap: 6,
+    alignItems: 'center',
+  },
+  sortChip: {
+    paddingVertical: 4,
+    paddingHorizontal: 11,
+    borderRadius: 14,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  sortChipActive: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#4F46E5',
+  },
+  sortChipText: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: '#6B7280',
+  },
+  sortChipTextActive: {
+    color: '#4F46E5',
+    fontWeight: '700',
   },
   centeredContainer: {
     flex: 1,
@@ -640,6 +925,32 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#9CA3AF',
     fontStyle: 'italic',
+    flex: 1,
+    marginRight: 8,
+  },
+  cardActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  editButton: {
+    backgroundColor: '#EEF2FF',
+    borderWidth: 1,
+    borderColor: '#C7D2FE',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    minHeight: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  editButtonPressed: {
+    backgroundColor: '#E0E7FF',
+  },
+  editButtonText: {
+    color: '#4F46E5',
+    fontSize: 12,
+    fontWeight: '600',
   },
   deleteButton: {
     backgroundColor: '#FEE2E2',
