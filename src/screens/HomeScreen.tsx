@@ -1,18 +1,32 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
+  Pressable,
   FlatList,
   ActivityIndicator,
   RefreshControl,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
-import { getTasks } from '../services/api';
+import { getTasks, updateTask, deleteTask } from '../services/api';
 import type { Task, TaskPriority } from '../types';
+import type { AppStackParamList } from '../types/navigation';
+
+type HomeScreenNavigationProp = NativeStackNavigationProp<
+  AppStackParamList,
+  'Home'
+>;
+
+type Props = {
+  navigation: HomeScreenNavigationProp;
+};
 
 function formatDateTime(dateStr: string): string {
   if (!dateStr) {
@@ -64,12 +78,16 @@ function getPriorityBadgeStyle(priority: TaskPriority) {
   }
 }
 
-export default function HomeScreen() {
+export default function HomeScreen({ navigation }: Props) {
   const { user, logout } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+
+  // Safeguard ref to ensure delete presses never trigger toggle completion
+  const isDeletingRef = useRef(false);
 
   const loadTasks = useCallback(async (isRefresh = false) => {
     if (isRefresh) {
@@ -94,16 +112,89 @@ export default function HomeScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    loadTasks();
-  }, [loadTasks]);
+  // Automatically refresh tasks whenever screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadTasks();
+    }, [loadTasks])
+  );
+
+  const handleToggleComplete = async (task: Task) => {
+    if (isDeletingRef.current) {
+      return;
+    }
+
+    const nextCompleted = !task.completed;
+    try {
+      setActionLoadingId(task._id);
+      const updated = await updateTask(task._id, { completed: nextCompleted });
+      setTasks((prev) =>
+        prev.map((t) => (t._id === task._id ? updated : t))
+      );
+    } catch (error: unknown) {
+      let message = 'Failed to update task status. Please try again.';
+      if (axios.isAxiosError(error) && error.response?.data?.message) {
+        message = error.response.data.message;
+      }
+      Alert.alert('Error', message);
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
+  const handleDeleteTask = (task: Task) => {
+    isDeletingRef.current = true;
+    setTimeout(() => {
+      isDeletingRef.current = false;
+    }, 500);
+
+    Alert.alert(
+      'Delete Task',
+      'Are you sure you want to delete this task?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setActionLoadingId(task._id);
+              await deleteTask(task._id);
+              setTasks((prev) => prev.filter((t) => t._id !== task._id));
+            } catch (error: unknown) {
+              let message = 'Failed to delete task. Please try again.';
+              if (axios.isAxiosError(error) && error.response?.data?.message) {
+                message = error.response.data.message;
+              }
+              Alert.alert('Error', message);
+            } finally {
+              setActionLoadingId(null);
+            }
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  };
 
   const renderTaskItem = ({ item }: { item: Task }) => {
     const priorityInfo = getPriorityBadgeStyle(item.priority);
     const hasDescription = Boolean(item.description && item.description.trim());
+    const isActionLoading = actionLoadingId === item._id;
 
     return (
-      <View style={styles.taskCard}>
+      <Pressable
+        style={({ pressed }) => [
+          styles.taskCard,
+          item.completed && styles.taskCardCompleted,
+          pressed && !isActionLoading && styles.taskCardPressed,
+        ]}
+        onPress={() => handleToggleComplete(item)}
+        disabled={isActionLoading}
+      >
         <View style={styles.cardHeader}>
           <View
             style={[
@@ -140,10 +231,24 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        <Text style={styles.taskTitle}>{item.title}</Text>
+        <Text
+          style={[
+            styles.taskTitle,
+            item.completed && styles.taskTitleCompleted,
+          ]}
+        >
+          {item.title}
+        </Text>
 
         {hasDescription && (
-          <Text style={styles.taskDescription}>{item.description}</Text>
+          <Text
+            style={[
+              styles.taskDescription,
+              item.completed && styles.taskDescriptionCompleted,
+            ]}
+          >
+            {item.description}
+          </Text>
         )}
 
         <View style={styles.dateContainer}>
@@ -156,7 +261,32 @@ export default function HomeScreen() {
             <Text style={styles.dateValue}>{formatDateTime(item.deadline)}</Text>
           </View>
         </View>
-      </View>
+
+        {/* Card Footer with Tap Hint and Separate Delete Button */}
+        <View style={styles.cardFooter}>
+          <Text style={styles.tapHintText}>
+            {item.completed ? 'Tap card to mark pending' : 'Tap card to complete'}
+          </Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.deleteButton,
+              pressed && styles.deleteButtonPressed,
+            ]}
+            onPress={(e) => {
+              e.stopPropagation();
+              handleDeleteTask(item);
+            }}
+            disabled={isActionLoading}
+            hitSlop={8}
+          >
+            {isActionLoading ? (
+              <ActivityIndicator size="small" color="#DC2626" />
+            ) : (
+              <Text style={styles.deleteButtonText}>Delete</Text>
+            )}
+          </Pressable>
+        </View>
+      </Pressable>
     );
   };
 
@@ -172,13 +302,22 @@ export default function HomeScreen() {
             <Text style={styles.headerEmail}>{user.email}</Text>
           ) : null}
         </View>
-        <TouchableOpacity
-          style={styles.logoutButton}
-          onPress={logout}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.logoutText}>Log Out</Text>
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.addTaskHeaderButton}
+            onPress={() => navigation.navigate('AddTask')}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.addTaskHeaderText}>+ Add</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.logoutButton}
+            onPress={logout}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.logoutText}>Log Out</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Main Content */}
@@ -202,31 +341,51 @@ export default function HomeScreen() {
           </View>
         </View>
       ) : (
-        <FlatList
-          data={tasks}
-          keyExtractor={(item) => item._id}
-          renderItem={renderTaskItem}
-          contentContainerStyle={[
-            styles.listContent,
-            tasks.length === 0 && styles.emptyListContent,
-          ]}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => loadTasks(true)}
-              colors={['#4F46E5']}
-              tintColor="#4F46E5"
-            />
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyTitle}>No Tasks Found</Text>
-              <Text style={styles.emptySubtitle}>
-                You do not have any tasks right now. Pull down to refresh.
-              </Text>
-            </View>
-          }
-        />
+        <View style={styles.contentWrapper}>
+          <FlatList
+            data={tasks}
+            keyExtractor={(item) => item._id}
+            renderItem={renderTaskItem}
+            contentContainerStyle={[
+              styles.listContent,
+              tasks.length === 0 && styles.emptyListContent,
+            ]}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={() => loadTasks(true)}
+                colors={['#4F46E5']}
+                tintColor="#4F46E5"
+              />
+            }
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyTitle}>No Tasks Found</Text>
+                <Text style={styles.emptySubtitle}>
+                  You do not have any tasks right now. Pull down to refresh or create your first task.
+                </Text>
+                <TouchableOpacity
+                  style={styles.emptyAddButton}
+                  onPress={() => navigation.navigate('AddTask')}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.emptyAddButtonText}>+ Create Task</Text>
+                </TouchableOpacity>
+              </View>
+            }
+          />
+
+          {/* Floating Action Button */}
+          {tasks.length > 0 && (
+            <TouchableOpacity
+              style={styles.fab}
+              onPress={() => navigation.navigate('AddTask')}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.fabText}>+ Add Task</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       )}
     </SafeAreaView>
   );
@@ -237,22 +396,30 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F9FAFB',
   },
+  contentWrapper: {
+    flex: 1,
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingVertical: 14,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
   headerInfo: {
     flex: 1,
-    marginRight: 12,
+    marginRight: 10,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   greeting: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     color: '#111827',
   },
@@ -261,10 +428,21 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     marginTop: 2,
   },
+  addTaskHeaderButton: {
+    backgroundColor: '#4F46E5',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 6,
+  },
+  addTaskHeaderText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   logoutButton: {
     backgroundColor: '#FEE2E2',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     borderRadius: 6,
   },
   logoutText: {
@@ -318,7 +496,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 16,
-    paddingBottom: 32,
+    paddingBottom: 90,
   },
   emptyListContent: {
     flexGrow: 1,
@@ -340,6 +518,18 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     textAlign: 'center',
     lineHeight: 20,
+    marginBottom: 20,
+  },
+  emptyAddButton: {
+    backgroundColor: '#4F46E5',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  emptyAddButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
   taskCard: {
     backgroundColor: '#FFFFFF',
@@ -353,6 +543,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 2,
+  },
+  taskCardPressed: {
+    backgroundColor: '#F3F4F6',
+  },
+  taskCardCompleted: {
+    backgroundColor: '#F9FAFB',
+    opacity: 0.75,
+    borderColor: '#E5E7EB',
   },
   cardHeader: {
     flexDirection: 'row',
@@ -397,11 +595,18 @@ const styles = StyleSheet.create({
     color: '#111827',
     marginBottom: 6,
   },
+  taskTitleCompleted: {
+    textDecorationLine: 'line-through',
+    color: '#9CA3AF',
+  },
   taskDescription: {
     fontSize: 14,
     color: '#4B5563',
     lineHeight: 20,
     marginBottom: 12,
+  },
+  taskDescriptionCompleted: {
+    color: '#9CA3AF',
   },
   dateContainer: {
     backgroundColor: '#F9FAFB',
@@ -421,5 +626,57 @@ const styles = StyleSheet.create({
   dateValue: {
     fontSize: 12,
     color: '#374151',
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  tapHintText: {
+    fontSize: 12,
+    color: '#9CA3AF',
+    fontStyle: 'italic',
+  },
+  deleteButton: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+    minHeight: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  deleteButtonPressed: {
+    backgroundColor: '#FCA5A5',
+  },
+  deleteButtonText: {
+    color: '#DC2626',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  fab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 24,
+    backgroundColor: '#4F46E5',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 28,
+    shadowColor: '#4F46E5',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  fabText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });

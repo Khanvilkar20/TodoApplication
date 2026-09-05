@@ -1,10 +1,11 @@
-﻿import React from 'react';
+import React from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import type { AuthStackParamList, AppStackParamList } from '../types/navigation';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
 import HomeScreen from '../screens/HomeScreen';
+import AddTaskScreen from '../screens/AddTaskScreen';
 import { useAuth } from '../context/AuthContext';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
@@ -31,6 +32,7 @@ export default function AppNavigator() {
         }}
       >
         <AppStack.Screen name="Home" component={HomeScreen} />
+        <AppStack.Screen name="AddTask" component={AddTaskScreen} />
       </AppStack.Navigator>
     );
   }
