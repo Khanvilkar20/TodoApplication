@@ -1,9 +1,11 @@
 /**
- * Defines the parameter list for the Auth stack navigator.
- * Each key is a screen name; the value is the params that screen accepts.
- * `undefined` means the screen takes no params.
+ * Defines the parameter lists for stack navigators.
  */
 export type AuthStackParamList = {
   Login: undefined;
   Register: undefined;
+};
+
+export type AppStackParamList = {
+  Home: undefined;
 };

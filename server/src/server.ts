@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import connectDB from './config/database';
+import authRoutes from './routes/authRoutes';
 
 const app = express();
 const PORT = process.env.PORT ?? 5000;
@@ -14,6 +15,9 @@ app.use(express.json());
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', message: 'Server is running' });
 });
+
+// Auth routes
+app.use('/api/auth', authRoutes);
 
 // Start server only after DB connects
 connectDB()
