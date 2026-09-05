@@ -1,5 +1,6 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { Task, CreateTaskInput, UpdateTaskInput } from '../types';
 
 /**
  * Android Development Backend Configuration:
@@ -35,4 +36,26 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// Task API functions
+export const getTasks = async (): Promise<Task[]> => {
+  const response = await api.get<{ tasks: Task[] }>('/api/tasks');
+  return response.data.tasks;
+};
+
+export const createTask = async (payload: CreateTaskInput): Promise<Task> => {
+  const response = await api.post<{ message: string; task: Task }>('/api/tasks', payload);
+  return response.data.task;
+};
+
+export const updateTask = async (id: string, payload: UpdateTaskInput): Promise<Task> => {
+  const response = await api.put<{ message: string; task: Task }>(`/api/tasks/${id}`, payload);
+  return response.data.task;
+};
+
+export const deleteTask = async (id: string): Promise<{ message: string }> => {
+  const response = await api.delete<{ message: string }>(`/api/tasks/${id}`);
+  return response.data;
+};
+
 export default api;
+
