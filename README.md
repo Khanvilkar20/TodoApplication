@@ -16,6 +16,16 @@ Try the latest Android release of Taskly:
 
 ---
 
+## 🎥 Demo
+
+Watch the Taskly application demo:
+
+👉 [Watch Taskly Demo](https://drive.google.com/file/d/1UefBQ2uWMbb3m4vk9F44J_8Ao8Qv2ZyA/view?usp=sharing)
+
+> The demo covers authentication, task creation, deadlines, priorities, task completion, editing, deletion, filtering, and smart sorting.
+
+---
+
 ##  Features
 
 ### Authentication
